@@ -1,15 +1,14 @@
 {
   "name": "whatsapp-endpoint",
   "version": "1.0.0",
-  "description": "WhatsApp Flow endpoint saving to Google Sheets",
   "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
+  "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
-    "body-parser": "^1.20.2",
-    "googleapis": "^121.0.0",
+    "google-spreadsheet": "^5.5.0",
     "dotenv": "^16.3.1"
+  },
+  "scripts": {
+    "start": "node index.js"
   }
 }
