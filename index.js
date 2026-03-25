@@ -1,74 +1,55 @@
-require("dotenv").config();
-const express = require("express");
-const crypto = require("crypto");
-const { GoogleSpreadsheet } = require("google-spreadsheet");
+import express from "express";
+import bodyParser from "body-parser";
+import crypto from "crypto";
 
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+app.use(bodyParser.json());
 
-// --- Initialize Google Sheet ---
-const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID);
+// Get your private key from env variable
+// If stored as a single line, add proper PEM headers
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY env variable is missing!");
 
-// --- Load service account credentials from env ---
-const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
+// Convert single-line key to proper PEM format if needed
+const privateKeyPEM = PRIVATE_KEY.includes("-----BEGIN")
+  ? PRIVATE_KEY
+  : `-----BEGIN PRIVATE KEY-----\n${PRIVATE_KEY.match(/.{1,64}/g).join("\n")}\n-----END PRIVATE KEY-----`;
 
-async function accessSheet() {
-  await doc.useServiceAccountAuth(serviceAccount);
-  await doc.loadInfo();
-  return doc.sheetsByIndex[0]; // first sheet
-}
-
-// Health check (Meta uses this)
-app.get('/', (req, res) => {
-  res.json({ status: 'endpoint working' });
-});
-
-// --- POST endpoint for WhatsApp webhook ---
-app.post("/", async (req, res) => {
+app.post("/webhook", async (req, res) => {
   try {
     const { encrypted_flow_data, encrypted_aes_key, initial_vector } = req.body;
 
     if (!encrypted_flow_data || !encrypted_aes_key || !initial_vector) {
-      return res.status(400).send("Missing encrypted data");
+      return res.status(400).json({ error: "Missing encrypted data" });
     }
 
-    // --- Step 1: decrypt AES key using Meta private key ---
-    const privateKey = process.env.META_PRIVATE_KEY.replace(/\\n/g, "\n");
+    // 1️⃣ Decrypt the AES key using your private RSA key
     const aesKey = crypto.privateDecrypt(
-      { key: privateKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING },
+      {
+        key: privateKeyPEM,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: "sha256",
+      },
       Buffer.from(encrypted_aes_key, "base64")
     );
 
-    // --- Step 2: decrypt the flow data ---
+    // 2️⃣ Decrypt the flow data using AES-256-CBC
     const decipher = crypto.createDecipheriv(
       "aes-256-cbc",
       aesKey,
       Buffer.from(initial_vector, "base64")
     );
+
     let decrypted = decipher.update(encrypted_flow_data, "base64", "utf8");
     decrypted += decipher.final("utf8");
 
-    const flowData = JSON.parse(decrypted);
-    console.log("Decrypted flow data:", flowData);
+    // 3️⃣ Meta expects Base64 encoded response
+    const responseBase64 = Buffer.from(decrypted, "utf8").toString("base64");
 
-    // --- Step 3: save to Google Sheet ---
-    const sheet = await accessSheet();
-
-    // Flatten flowData into a row
-    const row = { timestamp: new Date().toISOString() };
-    Object.keys(flowData).forEach((key) => {
-      row[key] = JSON.stringify(flowData[key]);
-    });
-
-    await sheet.addRow(row);
-
-    // --- Step 4: respond with Base64 encoded message ---
-    const response = { status: "ok" };
-    const base64Response = Buffer.from(JSON.stringify(response)).toString("base64");
-    res.send(base64Response);
+    res.json({ encrypted_response: responseBase64 });
   } catch (err) {
     console.error(err);
-    res.status(500).send("Internal server error");
+    res.status(500).json({ error: err.message });
   }
 });
 
