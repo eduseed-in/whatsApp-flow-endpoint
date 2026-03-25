@@ -64,7 +64,7 @@ app.post("/flow", async (req, res) => {
   // 3. Complete — user finished the flow, save to Google Sheets
   if (action === "complete") {
     const bookedDemo = data.demo_interest === "yes";
-
+ 
     const row = {
       Timestamp: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
       "WhatsApp Number": data.whatsapp_number ?? "",
@@ -76,36 +76,36 @@ app.post("/flow", async (req, res) => {
       "Demo Day": bookedDemo ? (data.demo_day ?? "") : "",
       "Demo Time": bookedDemo ? (data.demo_time ?? "") : "",
     };
-
+ 
     try {
       await appendToSheet(row);
       console.log("[Sheets] Row saved:", row);
     } catch (err) {
       console.error("[Sheets] Failed to save row:", err);
     }
-
+ 
     return res.send(encryptResponse({ data: { status: "success" } }, aesKeyBuffer, initialVectorBuffer));
   }
-
+ 
   // 4. Data exchange — handle screen routing
   if (action === "data_exchange") {
-
+ 
     // AGE screen: route to sorry screen if child is 4 or below
     if (screen === "AGE") {
-      const nextScreen = data.child_age === "age1" ? "THANKYOU" : "GRADE";
+      const nextScreen = data.child_age === "age1" ? "TOO_YOUNG" : "GRADE";
       return res.send(encryptResponse({ screen: nextScreen, data: {} }, aesKeyBuffer, initialVectorBuffer));
     }
-
+ 
     // DEMO_OPTION screen: skip demo booking if user says no
     if (screen === "DEMO_OPTION") {
-      const nextScreen = data.demo_interest === "yes" ? "DEMO_DAY" : "THANKYOU";
+      const nextScreen = data.demo_interest === "yes" ? "DEMO_DATE" : "THANKYOU";
       return res.send(encryptResponse({ screen: nextScreen, data: {} }, aesKeyBuffer, initialVectorBuffer));
     }
-
+ 
     // All other screens — just acknowledge
     return res.send(encryptResponse({ data: {} }, aesKeyBuffer, initialVectorBuffer));
   }
-
+ 
   return res.status(400).send("Unknown action");
 });
 
