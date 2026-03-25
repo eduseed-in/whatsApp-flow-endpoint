@@ -2,67 +2,70 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const { google } = require('googleapis');
-const app = express();
 
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Parse JSON requests
 app.use(bodyParser.json());
 
-// Google Sheets Setup
-const SPREADSHEET_ID = '17wS6k3ffrxBb1fABUx_q7eULKha8kXbzEpg374cqUcA';
-const SHEET_NAME = 'Sheet1';
-
-// Load Service Account credentials
-const serviceAccount = require('./service-account.json');
-
+// Google Sheets setup
+const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
 const auth = new google.auth.GoogleAuth({
   credentials: serviceAccount,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  scopes: ['https://www.googleapis.com/auth/spreadsheets']
 });
-
 const sheets = google.sheets({ version: 'v4', auth });
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
-// Health check endpoint
-app.get('/', (req, res) => {
-  res.json({ status: 'endpoint working' });
-});
-
-// WhatsApp Flow POST endpoint
-app.post('/', async (req, res) => {
+// Helper function to append a row
+async function appendRow(data) {
   try {
-    const body = req.body;
-
-    const parentName = body.contacts?.[0]?.profile?.name || '';
-    const phone = body.contacts?.[0]?.wa_id || '';
-    const childAge = body.flow_data?.child_age || '';
-    const grade = body.flow_data?.grade || '';
-    const interests = Array.isArray(body.flow_data?.interest)
-      ? body.flow_data.interest.join(', ')
-      : body.flow_data?.interest || '';
-    const callbackTime = body.flow_data?.callback_time || '';
-    const bookDemo = body.flow_data?.book_demo || '';
-    const demoDay = body.flow_data?.demo_day || '';
-    const demoTime = body.flow_data?.demo_time || '';
-
-    const timestamp = new Date().toISOString();
-
-    // Append data to Google Sheet
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A1`,
+      range: 'Sheet1!A1',
       valueInputOption: 'RAW',
-      resource: {
-        values: [
-          [timestamp, parentName, phone, childAge, grade, interests, callbackTime, bookDemo, demoDay, demoTime],
-        ],
-      },
+      resource: { values: [data] }
     });
+  } catch (error) {
+    console.error('Error appending row:', error);
+    throw error;
+  }
+}
 
-    res.json({ status: 'received' });
+// WhatsApp webhook endpoint
+app.post('/webhook', async (req, res) => {
+  try {
+    // Example payload from WhatsApp flow
+    const { child_name, child_age, grade, interest, callback_time } = req.body;
+
+    // Save data to Google Sheets
+    const timestamp = new Date().toISOString();
+    const row = [
+      timestamp,
+      child_name || '',
+      child_age || '',
+      grade || '',
+      Array.isArray(interest) ? interest.join(', ') : interest || '',
+      callback_time || ''
+    ];
+
+    await appendRow(row);
+
+    // Respond to WhatsApp
+    res.json({ status: 'success', message: 'Enquiry saved' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ status: 'error', error: err.message });
+    res.status(500).json({ status: 'error', message: 'Failed to save enquiry' });
   }
 });
 
+// Health check endpoint for Meta
+app.get('/webhook', (req, res) => {
+  // Meta sends a GET request to verify webhook
+  res.json({ status: 'endpoint working' });
+});
+
 // Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
