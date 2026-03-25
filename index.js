@@ -14,7 +14,7 @@ const SHEET_NAME = "Leads"; // change if your sheet tab is named differently
 // ─── GOOGLE SHEETS ────────────────────────────────────────────────────────────
 // Load service account credentials from the JSON file pointed to by GOOGLE_APPLICATION_CREDENTIALS
 // The JSON file contains client_email and private_key from your Google Cloud service account
-const serviceAccount = require(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+const serviceAccount = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS);
 
 const appendToSheet = async (row) => {
   const doc = new GoogleSpreadsheet(SPREADSHEET_ID, {
