@@ -1,71 +1,71 @@
 // index.js
-const express = require('express');
-const bodyParser = require('body-parser');
-const { google } = require('googleapis');
+import express from 'express';
+import bodyParser from 'body-parser';
+import { google } from 'googleapis';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Parse JSON requests
 app.use(bodyParser.json());
 
-// Google Sheets setup
-const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
+// --- Load service account from environment variable ---
+if (!process.env.SERVICE_ACCOUNT_JSON) {
+  console.error('ERROR: SERVICE_ACCOUNT_JSON is not defined!');
+  process.exit(1);
+}
+if (!process.env.SPREADSHEET_ID) {
+  console.error('ERROR: SPREADSHEET_ID is not defined!');
+  process.exit(1);
+}
+
+let serviceAccount;
+try {
+  serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
+  console.log('Service account loaded successfully');
+} catch (err) {
+  console.error('ERROR parsing SERVICE_ACCOUNT_JSON:', err);
+  process.exit(1);
+}
+
 const auth = new google.auth.GoogleAuth({
   credentials: serviceAccount,
   scopes: ['https://www.googleapis.com/auth/spreadsheets']
 });
+
 const sheets = google.sheets({ version: 'v4', auth });
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
-// Helper function to append a row
-async function appendRow(data) {
-  try {
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Sheet1!A1',
-      valueInputOption: 'RAW',
-      resource: { values: [data] }
-    });
-  } catch (error) {
-    console.error('Error appending row:', error);
-    throw error;
-  }
-}
+// --- Health check endpoint for Meta ---
+app.get('/', (req, res) => {
+  res.status(200).send({ status: 'endpoint working' });
+});
 
-// WhatsApp webhook endpoint
+// --- Webhook endpoint for WhatsApp ---
 app.post('/webhook', async (req, res) => {
   try {
-    // Example payload from WhatsApp flow
-    const { child_name, child_age, grade, interest, callback_time } = req.body;
+    const body = req.body;
 
-    // Save data to Google Sheets
+    // Example: save timestamp + user message
     const timestamp = new Date().toISOString();
-    const row = [
-      timestamp,
-      child_name || '',
-      child_age || '',
-      grade || '',
-      Array.isArray(interest) ? interest.join(', ') : interest || '',
-      callback_time || ''
-    ];
+    const userMessage = JSON.stringify(body);
 
-    await appendRow(row);
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Sheet1!A:B', // Adjust your sheet and columns
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: [[timestamp, userMessage]]
+      }
+    });
 
-    // Respond to WhatsApp
-    res.json({ status: 'success', message: 'Enquiry saved' });
+    console.log('Enquiry saved at', timestamp);
+    res.status(200).send({ status: 'success' });
   } catch (err) {
-    res.status(500).json({ status: 'error', message: 'Failed to save enquiry' });
+    console.error('Error saving to Google Sheets:', err);
+    res.status(500).send({ status: 'error', message: err.message });
   }
 });
 
-// Health check endpoint for Meta
-app.get('/webhook', (req, res) => {
-  // Meta sends a GET request to verify webhook
-  res.json({ status: 'endpoint working' });
-});
-
-// Start server
+// --- Start server ---
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
