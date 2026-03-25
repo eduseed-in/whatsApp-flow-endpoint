@@ -26,6 +26,22 @@ const appendToSheet = async (row) => {
   await sheet.addRow(row);
 };
 
+
+// ─── WEBHOOK VERIFICATION ────────────────────────────────────────────────────
+app.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+ 
+  if (mode === "subscribe" && token === process.env.VERIFY_TOKEN) {
+    console.log("Webhook verified!");
+    return res.status(200).send(challenge);
+  }
+ 
+  return res.status(403).send("Forbidden");
+});
+ 
+
 // ─── MAIN ENDPOINT ────────────────────────────────────────────────────────────
 app.post("/flow", async (req, res) => {
   // 1. Decrypt incoming request
