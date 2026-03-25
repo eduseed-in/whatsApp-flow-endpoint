@@ -1,0 +1,8 @@
+# Node modules
+node_modules/
+
+# Service account key (never commit)
+service-account.json
+
+# Environment file
+.env
