@@ -1,71 +1,76 @@
-// index.js
-import express from 'express';
-import bodyParser from 'body-parser';
-import { google } from 'googleapis';
+require("dotenv").config();
+const express = require("express");
+const crypto = require("crypto");
+const { GoogleSpreadsheet } = require("google-spreadsheet");
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json({ limit: "1mb" }));
 
-// --- Load service account from environment variable ---
-if (!process.env.SERVICE_ACCOUNT_JSON) {
-  console.error('ERROR: SERVICE_ACCOUNT_JSON is not defined!');
-  process.exit(1);
-}
-if (!process.env.SPREADSHEET_ID) {
-  console.error('ERROR: SPREADSHEET_ID is not defined!');
-  process.exit(1);
-}
+// --- Initialize Google Sheet ---
+const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID);
 
-let serviceAccount;
-try {
-  serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
-  console.log('Service account loaded successfully');
-} catch (err) {
-  console.error('ERROR parsing SERVICE_ACCOUNT_JSON:', err);
-  process.exit(1);
+// --- Load service account credentials from env ---
+const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
+
+async function accessSheet() {
+  await doc.useServiceAccountAuth(serviceAccount);
+  await doc.loadInfo();
+  return doc.sheetsByIndex[0]; // first sheet
 }
 
-const auth = new google.auth.GoogleAuth({
-  credentials: serviceAccount,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets']
-});
-
-const sheets = google.sheets({ version: 'v4', auth });
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-
-// --- Health check endpoint for Meta ---
+// Health check (Meta uses this)
 app.get('/', (req, res) => {
-  res.status(200).send({ status: 'endpoint working' });
+  res.json({ status: 'endpoint working' });
 });
 
-// --- Webhook endpoint for WhatsApp ---
-app.post('/webhook', async (req, res) => {
+// --- POST endpoint for WhatsApp webhook ---
+app.post("/", async (req, res) => {
   try {
-    const body = req.body;
+    const { encrypted_flow_data, encrypted_aes_key, initial_vector } = req.body;
 
-    // Example: save timestamp + user message
-    const timestamp = new Date().toISOString();
-    const userMessage = JSON.stringify(body);
+    if (!encrypted_flow_data || !encrypted_aes_key || !initial_vector) {
+      return res.status(400).send("Missing encrypted data");
+    }
 
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Sheet1!A:B', // Adjust your sheet and columns
-      valueInputOption: 'RAW',
-      requestBody: {
-        values: [[timestamp, userMessage]]
-      }
+    // --- Step 1: decrypt AES key using Meta private key ---
+    const privateKey = process.env.META_PRIVATE_KEY.replace(/\\n/g, "\n");
+    const aesKey = crypto.privateDecrypt(
+      { key: privateKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING },
+      Buffer.from(encrypted_aes_key, "base64")
+    );
+
+    // --- Step 2: decrypt the flow data ---
+    const decipher = crypto.createDecipheriv(
+      "aes-256-cbc",
+      aesKey,
+      Buffer.from(initial_vector, "base64")
+    );
+    let decrypted = decipher.update(encrypted_flow_data, "base64", "utf8");
+    decrypted += decipher.final("utf8");
+
+    const flowData = JSON.parse(decrypted);
+    console.log("Decrypted flow data:", flowData);
+
+    // --- Step 3: save to Google Sheet ---
+    const sheet = await accessSheet();
+
+    // Flatten flowData into a row
+    const row = { timestamp: new Date().toISOString() };
+    Object.keys(flowData).forEach((key) => {
+      row[key] = JSON.stringify(flowData[key]);
     });
 
-    console.log('Enquiry saved at', timestamp);
-    res.status(200).send({ status: 'success' });
+    await sheet.addRow(row);
+
+    // --- Step 4: respond with Base64 encoded message ---
+    const response = { status: "ok" };
+    const base64Response = Buffer.from(JSON.stringify(response)).toString("base64");
+    res.send(base64Response);
   } catch (err) {
-    console.error('Error saving to Google Sheets:', err);
-    res.status(500).send({ status: 'error', message: err.message });
+    console.error(err);
+    res.status(500).send("Internal server error");
   }
 });
 
-// --- Start server ---
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
